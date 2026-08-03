@@ -4,7 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>MinBizCon 2026 – Check-In Scanner</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
+  <!-- jsQR is now loaded dynamically with a fallback CDN, see script below -->
+  <script>
+    window.__jsQRLoaded = false;
+    window.__jsQRFailed = false;
+  </script>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
     body { font-family:-apple-system,'Segoe UI',Arial,sans-serif; background:#0a1a0c; color:white; height:100vh; overflow:hidden; position:fixed; width:100%; }
@@ -179,6 +183,38 @@
 // This is a same-origin call — CORS never applies, no config needed.
 // ════════════════════════════════════════════════════════════
 var GAS_URL = '/.netlify/functions/proxy';
+
+// ─── jsQR LOADER (tries 3 CDNs, so one blocked source doesn't break scanning) ──
+var JSQR_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js',
+  'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js',
+  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'
+];
+
+function loadJsQR(sourceIndex) {
+  if (typeof jsQR === 'function') {
+    window.__jsQRLoaded = true;
+    return;
+  }
+  if (sourceIndex >= JSQR_SOURCES.length) {
+    window.__jsQRFailed = true;
+    return;
+  }
+  var s = document.createElement('script');
+  s.src = JSQR_SOURCES[sourceIndex];
+  s.onload = function () {
+    if (typeof jsQR === 'function') {
+      window.__jsQRLoaded = true;
+    } else {
+      loadJsQR(sourceIndex + 1);
+    }
+  };
+  s.onerror = function () {
+    loadJsQR(sourceIndex + 1);
+  };
+  document.head.appendChild(s);
+}
+loadJsQR(0);
 
 // ─── STATE ───────────────────────────────────────────────────
 var stationName       = 'Main Gate';
@@ -400,11 +436,20 @@ function scanLoop() {
   var video  = document.getElementById('video');
   var canvas = document.getElementById('canvas');
   var ctx    = canvas.getContext('2d');
+  var hint   = document.getElementById('hint-text');
 
   if (typeof jsQR !== 'function') {
-    document.getElementById('hint-text').textContent = '⚠️ QR library failed to load. Check internet and reload page.';
+    if (window.__jsQRFailed) {
+      hint.textContent = '⚠️ QR scanner unavailable (network blocked). Use ⌨️ Manual Lookup below.';
+    } else {
+      hint.textContent = '⏳ Loading QR scanner...';
+    }
     requestAnimationFrame(scanLoop);
     return;
+  }
+
+  if (hint.textContent.indexOf('⏳') === 0 || hint.textContent.indexOf('⚠️ QR scanner unavailable') === 0) {
+    hint.textContent = "Point camera at participant's QR code";
   }
 
   if (video.readyState === video.HAVE_ENOUGH_DATA && !isProcessing) {
