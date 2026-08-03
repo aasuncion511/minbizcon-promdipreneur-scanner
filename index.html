@@ -401,13 +401,22 @@ function scanLoop() {
   var canvas = document.getElementById('canvas');
   var ctx    = canvas.getContext('2d');
 
+  if (typeof jsQR !== 'function') {
+    document.getElementById('hint-text').textContent = '⚠️ QR library failed to load. Check internet and reload page.';
+    requestAnimationFrame(scanLoop);
+    return;
+  }
+
   if (video.readyState === video.HAVE_ENOUGH_DATA && !isProcessing) {
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     try {
       var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      // 'attemptBoth' tries normal AND color-inverted scanning —
+      // catches more real-world conditions (screen glare, dark-mode
+      // displays, low contrast) than 'dontInvert' alone.
+      var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
       if (code && code.data && code.data.indexOf('MBC2026-') === 0) {
         processQRCode(code.data);
       }
