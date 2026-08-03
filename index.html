@@ -48,7 +48,7 @@
     .r-emoji     { font-size:76px; margin-bottom:16px; line-height:1; }
     .r-badge     { font-size:11px; font-weight:700; letter-spacing:2.5px; background:rgba(255,255,255,0.15); border-radius:20px; padding:5px 14px; margin-bottom:18px; }
     .r-name      { font-size:30px; font-weight:700; margin-bottom:6px; line-height:1.2; }
-    .r-company   { font-size:16px; opacity:0.85; margin-bottom:4px; }
+    .r-company   { font-size:15px; opacity:0.85; margin-bottom:4px; max-width:320px; line-height:1.5; word-break:break-word; }
     .r-position  { font-size:13px; opacity:0.55; margin-bottom:16px; }
     .r-time      { font-size:12px; opacity:0.55; background:rgba(255,255,255,0.1); border-radius:16px; padding:6px 18px; margin-bottom:24px; }
     .r-countdown { font-size:12px; opacity:0.4; }
@@ -121,8 +121,9 @@
 <div id="scan-line"></div>
 <div id="hint-text">Point camera at participant's QR code</div>
 <div id="bottombar">
-  <button class="bottom-btn" onclick="openManual()">⌨️ Manual Lookup</button>
-  <button class="bottom-btn" onclick="refreshStats()">🔄 Refresh Stats</button>
+  <button class="bottom-btn" id="flip-btn" onclick="flipCamera()">🔄 Rear Cam</button>
+  <button class="bottom-btn" onclick="openManual()">⌨️ Manual</button>
+  <button class="bottom-btn" onclick="refreshStats()">📊 Stats</button>
 </div>
 
 <!-- ══════════ CAMERA ERROR ══════════ -->
@@ -172,7 +173,12 @@
 // STEP 1: PASTE YOUR GAS DEPLOYMENT URL BELOW
 // It looks like: https://script.google.com/macros/s/AKfycbx.../exec
 // ════════════════════════════════════════════════════════════
-var GAS_URL = 'YOUR_GAS_URL_HERE';
+// ════════════════════════════════════════════════════════════
+// This scanner now calls its own site's server-side proxy,
+// which forwards requests to Google Apps Script server-to-server.
+// This is a same-origin call — CORS never applies, no config needed.
+// ════════════════════════════════════════════════════════════
+var GAS_URL = '/.netlify/functions/proxy';
 
 // ─── STATE ───────────────────────────────────────────────────
 var stationName       = 'Main Gate';
@@ -180,55 +186,53 @@ var isProcessing      = false;
 var countdownInterval = null;
 var checkedIn = 0;
 var total     = 0;
+var currentStream = null;          // active camera stream (so we can stop it on flip)
+var currentFacing = 'environment'; // 'environment' = rear, 'user' = front
 
-// ─── JSONP API CALLER ─────────────────────────────────────────
-// Calls GAS backend from outside script.google.com — no CORS issues
+// ─── API CALLER ────────────────────────────────────────────────
+// Calls this site's own /.netlify/functions/proxy endpoint.
+// This is a SAME-ORIGIN request (netlify.app calling netlify.app),
+// so browser CORS rules never apply here — no restrictions, no
+// fallback needed. The proxy itself talks to Google Apps Script
+// server-to-server, where CORS also does not apply.
 function callAPI(params, callback) {
-  if (!GAS_URL || GAS_URL === 'YOUR_GAS_URL_HERE') {
-    callback({ success: false, status: 'error', message: 'GAS_URL not set. Open this file and paste your deployment URL.' });
-    return;
-  }
-
-  var id   = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 9999);
-  var done = false;
-
-  var timer = setTimeout(function() {
-    if (!done) {
-      done = true; cleanup();
-      callback({ success: false, status: 'error', message: 'Request timed out. Check internet connection.' });
-    }
-  }, 15000);
-
-  function cleanup() {
-    delete window[id];
-    var el = document.getElementById('jsonp_' + id);
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-  }
-
-  window[id] = function(data) {
-    if (!done) {
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      callback(data);
-    }
-  };
-
-  var url = GAS_URL + '?callback=' + id;
+  var qs = [];
   for (var key in params) {
-    url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+    qs.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
   }
+  var url = GAS_URL + '?' + qs.join('&');
 
-  var script = document.createElement('script');
-  script.id = 'jsonp_' + id;
-  script.onerror = function() {
-    if (!done) {
-      done = true; clearTimeout(timer); cleanup();
-      callback({ success: false, status: 'error', message: 'Network error. Check internet connection.' });
-    }
-  };
-  script.src = url;
-  document.head.appendChild(script);
+  var timedOut = false;
+  var timer = setTimeout(function() { timedOut = true; }, 15000);
+
+  fetch(url, { method: 'GET' })
+    .then(function(res) {
+      return res.text().then(function(text) { return { ok: res.ok, status: res.status, text: text }; });
+    })
+    .then(function(result) {
+      clearTimeout(timer);
+      if (timedOut) return;
+
+      try {
+        var data = JSON.parse(result.text);
+        callback(data);
+      } catch (parseErr) {
+        callback({
+          success: false, status: 'error',
+          name: 'ProxyResponseError',
+          message: 'HTTP ' + result.status + ': ' + result.text.substring(0, 150)
+        });
+      }
+    })
+    .catch(function(err) {
+      clearTimeout(timer);
+      if (timedOut) return;
+      callback({
+        success: false, status: 'error',
+        name: 'NetworkError',
+        message: err.message || 'Could not reach the server. Check internet connection.'
+      });
+    });
 }
 
 // ─── START SCANNER ────────────────────────────────────────────
@@ -249,43 +253,131 @@ function startScanner() {
     return;
   }
 
-  navigator.mediaDevices.getUserMedia({ video: true })
-    .then(function(stream) {
-      document.getElementById('station-label').textContent = stationName;
-      document.getElementById('start-screen').classList.add('hide');
+  currentFacing = 'environment'; // always try REAR camera first
+  openCamera(currentFacing, true);
+}
 
-      var video = document.getElementById('video');
-      video.srcObject = stream;
-      video.addEventListener('loadedmetadata', function() {
-        video.play();
-        requestAnimationFrame(scanLoop);
-      }, { once: true });
+// ─── OPEN CAMERA (with rear-camera fallback chain) ───────────
+// isFirstStart = true means we transition from the start screen on success
+function openCamera(facing, isFirstStart) {
+  var btn   = document.getElementById('start-btn');
+  var video = document.getElementById('video');
 
-      setTimeout(function() {
-        if (video.readyState >= 2) requestAnimationFrame(scanLoop);
-      }, 3000);
+  // Stop any existing stream before switching
+  if (currentStream) {
+    currentStream.getTracks().forEach(function(track) { track.stop(); });
+    currentStream = null;
+  }
 
-      setTimeout(refreshStats, 1000);
-    })
-    .catch(function(err) {
-      btn.disabled    = false;
-      btn.textContent = '▶ START SCANNER';
+  // ATTEMPT 1: exact facingMode — forces rear camera on most devices
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing } } })
+    .then(function(stream) { onCameraReady(stream, isFirstStart); })
+    .catch(function() {
 
-      var msg = '';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera permission was denied.\n\n' +
-              'Android: Open Chrome Settings → Site Settings → Camera → find this site → Allow\n\n' +
-              'iPhone: Settings → Privacy & Security → Camera → Safari → Allow\n\n' +
-              'Then tap Retry Camera.';
-      } else if (err.name === 'NotFoundError') {
-        msg = 'No camera found on this device. Try a different phone or tablet.';
-      } else if (err.name === 'NotReadableError') {
-        msg = 'Camera is in use by another app. Close other apps and tap Retry.';
-      } else {
-        msg = 'Error: ' + err.name + '\n' + err.message;
-      }
-      showCameraError(err.name, msg);
+      // ATTEMPT 2: ideal facingMode — softer request, works on more devices
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } } })
+        .then(function(stream) { onCameraReady(stream, isFirstStart); })
+        .catch(function() {
+
+          // ATTEMPT 3: enumerate devices and pick rear camera by label
+          navigator.mediaDevices.enumerateDevices()
+            .then(function(devices) {
+              var cams = devices.filter(function(d) { return d.kind === 'videoinput'; });
+              var target = null;
+
+              if (facing === 'environment') {
+                // Look for a camera labelled back/rear/environment
+                target = cams.filter(function(c) {
+                  var l = (c.label || '').toLowerCase();
+                  return l.indexOf('back') > -1 || l.indexOf('rear') > -1 || l.indexOf('environment') > -1;
+                })[0];
+                // On most phones the LAST camera in the list is the rear one
+                if (!target && cams.length > 1) target = cams[cams.length - 1];
+              } else {
+                target = cams.filter(function(c) {
+                  var l = (c.label || '').toLowerCase();
+                  return l.indexOf('front') > -1 || l.indexOf('user') > -1;
+                })[0];
+                if (!target && cams.length > 0) target = cams[0];
+              }
+
+              if (target) {
+                return navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: target.deviceId } } })
+                  .then(function(stream) { onCameraReady(stream, isFirstStart); });
+              }
+              throw new Error('No matching camera found');
+            })
+            .catch(function() {
+
+              // ATTEMPT 4: any camera at all (last resort)
+              navigator.mediaDevices.getUserMedia({ video: true })
+                .then(function(stream) { onCameraReady(stream, isFirstStart); })
+                .catch(function(err) { handleCameraError(err, btn); });
+            });
+        });
     });
+}
+
+function onCameraReady(stream, isFirstStart) {
+  var video = document.getElementById('video');
+  currentStream = stream;
+  video.srcObject = stream;
+
+  if (isFirstStart) {
+    document.getElementById('station-label').textContent = stationName;
+    document.getElementById('start-screen').classList.add('hide');
+  }
+
+  video.addEventListener('loadedmetadata', function() {
+    video.play();
+    requestAnimationFrame(scanLoop);
+  }, { once: true });
+
+  setTimeout(function() {
+    if (video.readyState >= 2) requestAnimationFrame(scanLoop);
+  }, 2000);
+
+  if (isFirstStart) setTimeout(refreshStats, 1000);
+  updateFlipLabel();
+}
+
+function handleCameraError(err, btn) {
+  if (btn) {
+    btn.disabled    = false;
+    btn.textContent = '▶ START SCANNER';
+  }
+  var msg = '';
+  if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+    msg = 'Camera permission was denied.\n\n' +
+          'Android: Chrome Settings → Site Settings → Camera → find this site → Allow\n\n' +
+          'iPhone: Settings → Privacy & Security → Camera → Safari → Allow\n\n' +
+          'Then tap Retry Camera.';
+  } else if (err.name === 'NotFoundError') {
+    msg = 'No camera found on this device. Try a different phone or tablet.';
+  } else if (err.name === 'NotReadableError') {
+    msg = 'Camera is in use by another app. Close other apps and tap Retry.';
+  } else {
+    msg = 'Error: ' + err.name + '\n' + (err.message || '');
+  }
+  showCameraError(err.name || 'CameraError', msg);
+}
+
+// ─── FLIP CAMERA (front ⇄ rear) ──────────────────────────────
+function flipCamera() {
+  currentFacing = (currentFacing === 'environment') ? 'user' : 'environment';
+  var hint = document.getElementById('hint-text');
+  hint.textContent = 'Switching camera...';
+  openCamera(currentFacing, false);
+  setTimeout(function() {
+    hint.textContent = "Point camera at participant's QR code";
+  }, 1500);
+}
+
+function updateFlipLabel() {
+  var btn = document.getElementById('flip-btn');
+  if (btn) {
+    btn.textContent = (currentFacing === 'environment') ? '🔄 Rear Cam' : '🔄 Front Cam';
+  }
 }
 
 function showCameraError(code, msg) {
