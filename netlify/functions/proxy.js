@@ -31,9 +31,17 @@ exports.handler = async function (event) {
 
     // Server-to-server fetch — Google has no reason to block this,
     // there is no browser involved and therefore no CORS policy applies.
+    // We add browser-like headers because Google's servers sometimes
+    // redirect non-browser requests (missing User-Agent) to a sign-in
+    // page as a bot-protection measure, even on public deployments.
     var response = await fetch(targetUrl, {
       method: 'GET',
-      redirect: 'follow'
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
     });
 
     var text = await response.text();
