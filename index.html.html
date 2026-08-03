@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MinBizCon 2026 – Check-In Scanner</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body { font-family:-apple-system,'Segoe UI',Arial,sans-serif; background:#0a1a0c; color:white; height:100vh; overflow:hidden; position:fixed; width:100%; }
+
+    #topbar { position:fixed; top:0; left:0; right:0; height:56px; background:rgba(26,92,42,0.97); display:flex; align-items:center; justify-content:space-between; padding:0 16px; z-index:100; }
+    .topbar-title { font-size:14px; font-weight:700; }
+    .topbar-sub   { font-size:11px; opacity:0.65; }
+    #stats-badge  { background:rgba(255,255,255,0.15); border:1px solid rgba(144,238,144,0.35); border-radius:20px; padding:5px 14px; font-size:13px; font-weight:700; color:#90EE90; white-space:nowrap; }
+
+    #camera-container { position:fixed; top:0; bottom:0; left:0; right:0; }
+    #video  { width:100%; height:100%; object-fit:cover; }
+    #canvas { display:none; }
+
+    #mask       { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.45); z-index:40; pointer-events:none; }
+    #scan-frame { position:fixed; top:50%; left:50%; transform:translate(-50%,-52%); width:min(260px,70vw); height:min(260px,70vw); border:2px solid rgba(255,255,255,0.4); border-radius:16px; z-index:50; pointer-events:none; }
+    .corner { position:fixed; width:32px; height:32px; border-color:#2E8B3A; border-style:solid; z-index:60; pointer-events:none; }
+    .corner.tl { top:calc(50% - min(130px,35vw)); left:calc(50% - min(130px,35vw)); border-width:4px 0 0 4px; border-radius:12px 0 0 0; transform:translateY(-52%); }
+    .corner.tr { top:calc(50% - min(130px,35vw)); right:calc(50% - min(130px,35vw)); border-width:4px 4px 0 0; border-radius:0 12px 0 0; transform:translateY(-52%); }
+    .corner.bl { bottom:calc(50% - min(130px,35vw)); left:calc(50% - min(130px,35vw)); border-width:0 0 4px 4px; border-radius:0 0 0 12px; transform:translateY(52%); }
+    .corner.br { bottom:calc(50% - min(130px,35vw)); right:calc(50% - min(130px,35vw)); border-width:0 4px 4px 0; border-radius:0 0 12px 0; transform:translateY(52%); }
+    #scan-line  { position:fixed; top:calc(50% - min(130px,35vw)); left:calc(50% - min(130px,35vw) + 8px); right:calc(50% - min(130px,35vw) + 8px); height:2px; background:linear-gradient(90deg,transparent,#2E8B3A,#90EE90,#2E8B3A,transparent); animation:scanAnim 2s ease-in-out infinite; z-index:55; pointer-events:none; border-radius:2px; }
+    @keyframes scanAnim { 0%,100%{transform:translateY(0);opacity:1;} 50%{transform:translateY(min(252px,calc(70vw - 8px)));opacity:0.7;} }
+
+    #hint-text { position:fixed; bottom:110px; left:0; right:0; text-align:center; color:rgba(255,255,255,0.7); font-size:13px; z-index:60; pointer-events:none; }
+
+    #bottombar { position:fixed; bottom:0; left:0; right:0; padding:12px 16px; background:rgba(0,0,0,0.75); display:flex; gap:10px; z-index:100; }
+    .bottom-btn { flex:1; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.1); color:white; font-size:13px; font-weight:600; cursor:pointer; }
+
+    #loading-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); z-index:200; align-items:center; justify-content:center; flex-direction:column; gap:16px; }
+    #loading-overlay.show { display:flex; }
+    .spinner { width:44px; height:44px; border:3px solid rgba(255,255,255,0.12); border-top-color:#2E8B3A; border-radius:50%; animation:spin 0.8s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg);} }
+
+    #result-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:300; flex-direction:column; align-items:center; justify-content:center; padding:30px 28px; text-align:center; }
+    #result-overlay.show        { display:flex; }
+    #result-overlay.success     { background:rgba(22,76,34,0.98); }
+    #result-overlay.duplicate   { background:rgba(160,90,0,0.98); }
+    #result-overlay.not-found   { background:rgba(130,18,18,0.98); }
+    #result-overlay.error-state { background:rgba(40,40,40,0.98); }
+    .r-dismiss   { position:absolute; top:60px; right:20px; background:rgba(255,255,255,0.12); border:none; color:white; border-radius:50%; width:36px; height:36px; font-size:18px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .r-emoji     { font-size:76px; margin-bottom:16px; line-height:1; }
+    .r-badge     { font-size:11px; font-weight:700; letter-spacing:2.5px; background:rgba(255,255,255,0.15); border-radius:20px; padding:5px 14px; margin-bottom:18px; }
+    .r-name      { font-size:30px; font-weight:700; margin-bottom:6px; line-height:1.2; }
+    .r-company   { font-size:16px; opacity:0.85; margin-bottom:4px; }
+    .r-position  { font-size:13px; opacity:0.55; margin-bottom:16px; }
+    .r-time      { font-size:12px; opacity:0.55; background:rgba(255,255,255,0.1); border-radius:16px; padding:6px 18px; margin-bottom:24px; }
+    .r-countdown { font-size:12px; opacity:0.4; }
+
+    #camera-error-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:600; background:#0f2015; flex-direction:column; align-items:center; justify-content:center; padding:30px 28px; text-align:center; }
+    #camera-error-overlay.show { display:flex; }
+    .ce-icon  { font-size:72px; margin-bottom:20px; }
+    .ce-title { font-size:22px; font-weight:700; margin-bottom:12px; color:#ff6b6b; }
+    .ce-code  { font-family:monospace; font-size:13px; background:rgba(255,0,0,0.15); padding:6px 14px; border-radius:8px; margin-bottom:20px; color:#ffaaaa; }
+    .ce-msg   { font-size:14px; line-height:1.7; opacity:0.85; margin-bottom:30px; max-width:340px; white-space:pre-line; }
+    .ce-retry { padding:14px 32px; background:#1A5C2A; border:none; border-radius:12px; color:white; font-size:16px; font-weight:700; cursor:pointer; margin-bottom:12px; width:100%; max-width:280px; }
+    .ce-back  { padding:12px 32px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); border-radius:12px; color:white; font-size:14px; cursor:pointer; width:100%; max-width:280px; }
+
+    .modal { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.88); z-index:400; flex-direction:column; align-items:center; justify-content:center; padding:20px; }
+    .modal.show { display:flex; }
+    .modal-card     { background:#1b2e1e; border:1px solid rgba(46,139,58,0.4); border-radius:16px; padding:28px 24px; width:100%; max-width:420px; }
+    .modal-title    { font-size:18px; font-weight:700; margin-bottom:20px; }
+    .modal-label    { font-size:11px; opacity:0.55; margin-bottom:6px; display:block; letter-spacing:1px; }
+    .modal-input    { width:100%; padding:14px 16px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); border-radius:10px; color:white; font-size:15px; margin-bottom:16px; }
+    .modal-input:focus { outline:none; border-color:#2E8B3A; }
+    .modal-input::placeholder { color:rgba(255,255,255,0.28); }
+    .modal-btns     { display:flex; gap:10px; }
+    .btn-primary    { flex:1; padding:13px; background:#1A5C2A; border:none; border-radius:10px; color:white; font-size:14px; font-weight:700; cursor:pointer; }
+    .btn-secondary  { flex:1; padding:13px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); border-radius:10px; color:white; font-size:14px; cursor:pointer; }
+
+    #start-screen { position:fixed; top:0; left:0; right:0; bottom:0; background:#0f2015; z-index:500; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px 24px; }
+    #start-screen.hide { display:none; }
+    .s-logo   { width:80px; height:80px; background:#1A5C2A; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:38px; margin-bottom:20px; }
+    .s-title  { font-size:24px; font-weight:700; text-align:center; margin-bottom:4px; }
+    .s-sub    { font-size:13px; opacity:0.55; text-align:center; margin-bottom:36px; }
+    .s-label  { font-size:11px; opacity:0.55; margin-bottom:6px; align-self:flex-start; width:100%; max-width:400px; letter-spacing:1px; }
+    .s-input  { width:100%; max-width:400px; padding:14px 16px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); border-radius:10px; color:white; font-size:15px; margin-bottom:14px; }
+    .s-input:focus { outline:none; border-color:#2E8B3A; }
+    .s-input::placeholder { color:rgba(255,255,255,0.28); }
+    .s-start  { width:100%; max-width:400px; padding:16px; background:#1A5C2A; border:none; border-radius:12px; color:white; font-size:16px; font-weight:700; cursor:pointer; }
+    .s-start:active   { background:#2E8B3A; }
+    .s-start:disabled { opacity:0.5; cursor:not-allowed; }
+    .s-footer { font-size:11px; opacity:0.28; margin-top:30px; text-align:center; }
+  </style>
+</head>
+<body>
+
+<!-- ══════════ START SCREEN ══════════ -->
+<div id="start-screen">
+  <div class="s-logo">🎯</div>
+  <h1 class="s-title">MinBizCon 2026</h1>
+  <p class="s-sub">Digital Check-In Scanner<br>Promdipreneur BASA Consultancy</p>
+  <span class="s-label">STATION NAME</span>
+  <input type="text" id="station-input" class="s-input" value="Main Gate" placeholder="e.g. Gate 1, VIP Lane" />
+  <button id="start-btn" class="s-start" onclick="startScanner()">▶ START SCANNER</button>
+  <p class="s-footer">Powered by Promdipreneur BASA Consultancy | MinBizCon 2026</p>
+</div>
+
+<!-- ══════════ SCANNER UI ══════════ -->
+<div id="topbar">
+  <div>
+    <div class="topbar-title">MinBizCon 2026</div>
+    <div class="topbar-sub" id="station-label">Main Gate</div>
+  </div>
+  <div id="stats-badge">– / –</div>
+</div>
+<div id="camera-container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+</div>
+<div id="mask"></div>
+<div id="scan-frame"></div>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div id="scan-line"></div>
+<div id="hint-text">Point camera at participant's QR code</div>
+<div id="bottombar">
+  <button class="bottom-btn" onclick="openManual()">⌨️ Manual Lookup</button>
+  <button class="bottom-btn" onclick="refreshStats()">🔄 Refresh Stats</button>
+</div>
+
+<!-- ══════════ CAMERA ERROR ══════════ -->
+<div id="camera-error-overlay">
+  <div class="ce-icon">📵</div>
+  <div class="ce-title">Camera Not Available</div>
+  <div class="ce-code" id="ce-code">–</div>
+  <div class="ce-msg"  id="ce-msg">–</div>
+  <button class="ce-retry" onclick="retryCamera()">🔄 Retry Camera</button>
+  <button class="ce-back"  onclick="goBack()">← Change Station</button>
+</div>
+
+<!-- ══════════ LOADING ══════════ -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div style="font-size:13px;opacity:0.55;">Processing...</div>
+</div>
+
+<!-- ══════════ RESULT ══════════ -->
+<div id="result-overlay">
+  <button class="r-dismiss" onclick="dismissResult()">✕</button>
+  <div class="r-emoji"    id="r-emoji">✅</div>
+  <div class="r-badge"    id="r-badge">CHECKED IN</div>
+  <div class="r-name"     id="r-name">Name</div>
+  <div class="r-company"  id="r-company">Company</div>
+  <div class="r-position" id="r-position">Position</div>
+  <div class="r-time"     id="r-time">Checked in at 9:00 AM</div>
+  <div class="r-countdown" id="r-countdown">Scanning again in 3...</div>
+</div>
+
+<!-- ══════════ MANUAL MODAL ══════════ -->
+<div id="manual-modal" class="modal">
+  <div class="modal-card">
+    <div class="modal-title">⌨️ Manual Check-In</div>
+    <label class="modal-label">PARTICIPANT ID</label>
+    <input type="text" id="manual-id" class="modal-input"
+      placeholder="MBC2026-0001" autocapitalize="characters" />
+    <div class="modal-btns">
+      <button class="btn-primary"   onclick="submitManual()">Check In</button>
+      <button class="btn-secondary" onclick="closeManual()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════
+// STEP 1: PASTE YOUR GAS DEPLOYMENT URL BELOW
+// It looks like: https://script.google.com/macros/s/AKfycbx.../exec
+// ════════════════════════════════════════════════════════════
+var GAS_URL = 'YOUR_GAS_URL_HERE';
+
+// ─── STATE ───────────────────────────────────────────────────
+var stationName       = 'Main Gate';
+var isProcessing      = false;
+var countdownInterval = null;
+var checkedIn = 0;
+var total     = 0;
+
+// ─── JSONP API CALLER ─────────────────────────────────────────
+// Calls GAS backend from outside script.google.com — no CORS issues
+function callAPI(params, callback) {
+  if (!GAS_URL || GAS_URL === 'YOUR_GAS_URL_HERE') {
+    callback({ success: false, status: 'error', message: 'GAS_URL not set. Open this file and paste your deployment URL.' });
+    return;
+  }
+
+  var id   = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 9999);
+  var done = false;
+
+  var timer = setTimeout(function() {
+    if (!done) {
+      done = true; cleanup();
+      callback({ success: false, status: 'error', message: 'Request timed out. Check internet connection.' });
+    }
+  }, 15000);
+
+  function cleanup() {
+    delete window[id];
+    var el = document.getElementById('jsonp_' + id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  window[id] = function(data) {
+    if (!done) {
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      callback(data);
+    }
+  };
+
+  var url = GAS_URL + '?callback=' + id;
+  for (var key in params) {
+    url += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+  }
+
+  var script = document.createElement('script');
+  script.id = 'jsonp_' + id;
+  script.onerror = function() {
+    if (!done) {
+      done = true; clearTimeout(timer); cleanup();
+      callback({ success: false, status: 'error', message: 'Network error. Check internet connection.' });
+    }
+  };
+  script.src = url;
+  document.head.appendChild(script);
+}
+
+// ─── START SCANNER ────────────────────────────────────────────
+function startScanner() {
+  var btn = document.getElementById('start-btn');
+  stationName = document.getElementById('station-input').value.trim() || 'Main Gate';
+
+  btn.disabled    = true;
+  btn.textContent = '📷 Waiting for camera...';
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    btn.disabled    = false;
+    btn.textContent = '▶ START SCANNER';
+    showCameraError('CameraAPIUnavailable',
+      'This browser does not support camera access.\n\n' +
+      '• Android: use Chrome — open the link directly (not from Messenger)\n' +
+      '• iPhone: use Safari — open the link directly (not from Messenger)');
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ video: true })
+    .then(function(stream) {
+      document.getElementById('station-label').textContent = stationName;
+      document.getElementById('start-screen').classList.add('hide');
+
+      var video = document.getElementById('video');
+      video.srcObject = stream;
+      video.addEventListener('loadedmetadata', function() {
+        video.play();
+        requestAnimationFrame(scanLoop);
+      }, { once: true });
+
+      setTimeout(function() {
+        if (video.readyState >= 2) requestAnimationFrame(scanLoop);
+      }, 3000);
+
+      setTimeout(refreshStats, 1000);
+    })
+    .catch(function(err) {
+      btn.disabled    = false;
+      btn.textContent = '▶ START SCANNER';
+
+      var msg = '';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied.\n\n' +
+              'Android: Open Chrome Settings → Site Settings → Camera → find this site → Allow\n\n' +
+              'iPhone: Settings → Privacy & Security → Camera → Safari → Allow\n\n' +
+              'Then tap Retry Camera.';
+      } else if (err.name === 'NotFoundError') {
+        msg = 'No camera found on this device. Try a different phone or tablet.';
+      } else if (err.name === 'NotReadableError') {
+        msg = 'Camera is in use by another app. Close other apps and tap Retry.';
+      } else {
+        msg = 'Error: ' + err.name + '\n' + err.message;
+      }
+      showCameraError(err.name, msg);
+    });
+}
+
+function showCameraError(code, msg) {
+  document.getElementById('start-screen').classList.add('hide');
+  document.getElementById('ce-code').textContent = 'Error: ' + code;
+  document.getElementById('ce-msg').textContent  = msg;
+  document.getElementById('camera-error-overlay').classList.add('show');
+}
+function retryCamera() {
+  document.getElementById('camera-error-overlay').classList.remove('show');
+  document.getElementById('start-screen').classList.remove('hide');
+  var btn = document.getElementById('start-btn');
+  btn.disabled    = false;
+  btn.textContent = '▶ START SCANNER';
+}
+function goBack() { retryCamera(); }
+
+// ─── SCAN LOOP ────────────────────────────────────────────────
+function scanLoop() {
+  var video  = document.getElementById('video');
+  var canvas = document.getElementById('canvas');
+  var ctx    = canvas.getContext('2d');
+
+  if (video.readyState === video.HAVE_ENOUGH_DATA && !isProcessing) {
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    try {
+      var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      if (code && code.data && code.data.indexOf('MBC2026-') === 0) {
+        processQRCode(code.data);
+      }
+    } catch(e) {}
+  }
+  requestAnimationFrame(scanLoop);
+}
+
+// ─── PROCESS QR (uses JSONP instead of google.script.run) ────
+function processQRCode(participantId) {
+  if (isProcessing) return;
+  isProcessing = true;
+  showLoading();
+
+  callAPI({ action: 'checkin', id: participantId, station: stationName }, function(result) {
+    hideLoading();
+    if (!result) result = { success: false, status: 'error', message: 'Empty response from server.' };
+    showResult(result);
+    if (result.success) { checkedIn++; updateStats(); }
+  });
+}
+
+// ─── RESULT ──────────────────────────────────────────────────
+function showResult(result) {
+  var overlay   = document.getElementById('result-overlay');
+  var emoji     = document.getElementById('r-emoji');
+  var badge     = document.getElementById('r-badge');
+  var name      = document.getElementById('r-name');
+  var company   = document.getElementById('r-company');
+  var position  = document.getElementById('r-position');
+  var time      = document.getElementById('r-time');
+  var countdown = document.getElementById('r-countdown');
+
+  overlay.className = 'show';
+
+  if (result.success && result.status === 'checked_in') {
+    overlay.classList.add('success');
+    emoji.textContent    = '✅';
+    badge.textContent    = 'CHECKED IN' + (result.day ? ' — ' + result.day : '');
+    name.textContent     = result.name     || '—';
+    company.textContent  = result.company  || '—';
+    position.textContent = result.position || '';
+    time.textContent     = 'Checked in at ' + (result.checkinTime || 'now');
+
+  } else if (result.status === 'already_checked_in') {
+    overlay.classList.add('duplicate');
+    emoji.textContent    = '⚠️';
+    badge.textContent    = 'ALREADY CHECKED IN' + (result.day ? ' — ' + result.day : '');
+    name.textContent     = result.name     || '—';
+    company.textContent  = result.company  || '—';
+    position.textContent = result.position || '';
+    time.textContent     = 'Previously at ' + (result.checkinTime || 'earlier');
+
+  } else if (result.status === 'not_found') {
+    overlay.classList.add('not-found');
+    emoji.textContent    = '❌';
+    badge.textContent    = 'NOT REGISTERED';
+    name.textContent     = 'Participant Not Found';
+    company.textContent  = 'QR code not in database';
+    position.textContent = '';
+    time.textContent     = 'Direct to manual registration desk';
+
+  } else {
+    overlay.classList.add('error-state');
+    emoji.textContent    = '⚠️';
+    badge.textContent    = 'ERROR';
+    name.textContent     = result.name    || 'Connection Error';
+    company.textContent  = result.message || result.company || 'Check internet and try again';
+    position.textContent = '';
+    time.textContent     = 'Use Manual Lookup if this continues';
+  }
+
+  var count = 3;
+  countdown.textContent = 'Scanning again in ' + count + '...';
+  if (countdownInterval) clearInterval(countdownInterval);
+  countdownInterval = setInterval(function() {
+    count--;
+    if (count > 0) {
+      countdown.textContent = 'Scanning again in ' + count + '...';
+    } else {
+      clearInterval(countdownInterval);
+      dismissResult();
+    }
+  }, 1000);
+}
+
+function dismissResult() {
+  if (countdownInterval) clearInterval(countdownInterval);
+  document.getElementById('result-overlay').className = '';
+  isProcessing = false;
+}
+
+// ─── LOADING ─────────────────────────────────────────────────
+function showLoading() { document.getElementById('loading-overlay').classList.add('show'); }
+function hideLoading() { document.getElementById('loading-overlay').classList.remove('show'); }
+
+// ─── STATS (uses JSONP) ───────────────────────────────────────
+function refreshStats() {
+  callAPI({ action: 'stats' }, function(stats) {
+    if (stats && stats.total !== undefined) {
+      checkedIn = stats.checkedIn || 0;
+      total     = stats.total     || 0;
+      updateStats();
+    }
+  });
+}
+function updateStats() {
+  document.getElementById('stats-badge').textContent = checkedIn + ' / ' + total;
+}
+
+// ─── MANUAL LOOKUP ────────────────────────────────────────────
+function openManual() {
+  document.getElementById('manual-modal').classList.add('show');
+  setTimeout(function() { document.getElementById('manual-id').focus(); }, 100);
+}
+function closeManual() {
+  document.getElementById('manual-modal').classList.remove('show');
+  document.getElementById('manual-id').value = '';
+}
+function submitManual() {
+  var id = document.getElementById('manual-id').value.trim().toUpperCase();
+  if (!id) return;
+  closeManual();
+  processQRCode(id);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  var input = document.getElementById('manual-id');
+  if (input) input.addEventListener('keypress', function(e) { if (e.key === 'Enter') submitManual(); });
+});
+</script>
+
+</body>
+</html>
