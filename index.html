@@ -18,6 +18,41 @@
     .topbar-sub   { font-size:11px; opacity:0.65; }
     #stats-badge  { background:rgba(255,255,255,0.15); border:1px solid rgba(144,238,144,0.35); border-radius:20px; padding:5px 14px; font-size:13px; font-weight:700; color:#90EE90; white-space:nowrap; }
 
+    /* ── PERSISTENT WALK-IN SEARCH BAR (always visible, not a modal) ── */
+    #walkin-bar {
+      position:fixed; top:56px; left:0; right:0; z-index:90;
+      background:rgba(15,32,21,0.92); padding:8px 12px;
+      border-bottom:1px solid rgba(46,139,58,0.35);
+    }
+    #walkin-bar input {
+      width:100%; padding:10px 14px; border-radius:10px;
+      border:1px solid rgba(255,255,255,0.18); background:rgba(255,255,255,0.08);
+      color:white; font-size:13px; outline:none;
+    }
+    #walkin-bar input:focus { border-color:#2E8B3A; }
+    #walkin-bar input::placeholder { color:rgba(255,255,255,0.4); }
+
+    #walkin-results {
+      position:fixed; top:104px; left:0; right:0; z-index:95;
+      max-height:min(60vh,420px); overflow-y:auto;
+      background:rgba(10,26,12,0.97);
+      display:none; padding:10px 12px;
+      border-bottom:1px solid rgba(46,139,58,0.35);
+    }
+    #walkin-results.show { display:block; }
+
+    .wi-card { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:12px; margin-bottom:10px; }
+    .wi-name { font-size:15px; font-weight:700; margin-bottom:2px; }
+    .wi-sub  { font-size:12px; opacity:0.6; margin-bottom:6px; }
+    .wi-status { display:inline-block; font-size:10.5px; font-weight:700; padding:3px 10px; border-radius:12px; margin-bottom:10px; margin-right:6px; }
+    .wi-status.paid    { background:rgba(46,139,58,0.25); color:#90EE90; }
+    .wi-status.waived  { background:rgba(144,144,255,0.2); color:#b3b3ff; }
+    .wi-status.review  { background:rgba(176,0,32,0.25); color:#ff9999; }
+    .wi-btns { display:flex; gap:8px; }
+    .wi-btn-process { flex:1; padding:10px; background:#1A5C2A; border:none; border-radius:8px; color:white; font-size:12.5px; font-weight:700; cursor:pointer; }
+    .wi-btn-flag { flex:1; padding:10px; background:rgba(176,0,32,0.2); border:1px solid rgba(176,0,32,0.4); border-radius:8px; color:#ff9999; font-size:12.5px; font-weight:700; cursor:pointer; }
+    .wi-empty { text-align:center; padding:24px 10px; opacity:0.4; font-size:13px; }
+
     #camera-container { position:fixed; top:0; bottom:0; left:0; right:0; }
     #video  { width:100%; height:100%; object-fit:cover; }
     #canvas { display:none; }
@@ -114,6 +149,13 @@
   </div>
   <div id="stats-badge">– / –</div>
 </div>
+
+<!-- ══════════ PERSISTENT WALK-IN SEARCH (always visible) ══════════ -->
+<div id="walkin-bar">
+  <input type="text" id="walkin-search" placeholder="🔍 Find Walk-In by name..." autocomplete="off" />
+</div>
+<div id="walkin-results"></div>
+
 <div id="camera-container">
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
@@ -572,6 +614,95 @@ function updateStats() {
   document.getElementById('stats-badge').textContent = checkedIn + ' / ' + total;
 }
 
+// ─── FIND WALK-IN ──────────────────────────────────────────────
+var walkinSearchTimer = null;
+
+function statusClass(status) {
+  if (!status) return '';
+  if (status === 'Paid') return 'paid';
+  if (status.indexOf('Non-Paying') === 0) return 'waived';
+  return '';
+}
+
+function showWalkInResults() { document.getElementById('walkin-results').classList.add('show'); }
+function hideWalkInResults() { document.getElementById('walkin-results').classList.remove('show'); }
+
+function renderWalkInResults(results) {
+  var container = document.getElementById('walkin-results');
+  if (!results || results.length === 0) {
+    container.innerHTML = '<div class="wi-empty">No matching unprocessed walk-ins found</div>';
+    showWalkInResults();
+    return;
+  }
+
+  var html = '';
+  results.forEach(function(r) {
+    var sClass = statusClass(r.paymentStatus);
+    var reviewBadge = r.reviewFlag
+      ? '<span class="wi-status review">🚩 ' + r.reviewFlag + '</span>'
+      : '';
+    html +=
+      '<div class="wi-card">' +
+        '<div class="wi-name">' + r.name + '</div>' +
+        '<div class="wi-sub">' + (r.company || '—') + (r.position ? ' · ' + r.position : '') + '</div>' +
+        '<span class="wi-status ' + sClass + '">' + (r.paymentStatus || 'No status') + '</span>' +
+        reviewBadge +
+        '<div class="wi-btns">' +
+          '<button class="wi-btn-process" onclick="processWalkInRow(' + r.row + ')">✅ Process</button>' +
+          '<button class="wi-btn-flag" onclick="flagWalkInRow(' + r.row + ')">🚩 Flag</button>' +
+        '</div>' +
+      '</div>';
+  });
+  container.innerHTML = html;
+  showWalkInResults();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  var searchInput = document.getElementById('walkin-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      var q = searchInput.value.trim();
+      clearTimeout(walkinSearchTimer);
+
+      if (!q) { hideWalkInResults(); return; }
+
+      walkinSearchTimer = setTimeout(function() {
+        callAPI({ action: 'search_walkins', q: q }, function(results) {
+          renderWalkInResults(results);
+        });
+      }, 300); // small debounce so it doesn't fire on every keystroke
+    });
+
+    // Re-show results if the person taps back into a field that already has text
+    searchInput.addEventListener('focus', function() {
+      if (searchInput.value.trim()) showWalkInResults();
+    });
+  }
+});
+
+function processWalkInRow(row) {
+  showLoading();
+  callAPI({ action: 'process_walkin', row: row, station: stationName }, function(result) {
+    hideLoading();
+    hideWalkInResults();
+    document.getElementById('walkin-search').value = '';
+    document.getElementById('walkin-search').blur();
+    if (!result) result = { success: false, status: 'error', message: 'Empty response from server.' };
+    showResult(result);
+    if (result.success) { checkedIn++; updateStats(); }
+  });
+}
+
+function flagWalkInRow(row) {
+  callAPI({ action: 'flag_walkin', row: row }, function(result) {
+    // Refresh the current search so the flagged badge shows immediately
+    var q = document.getElementById('walkin-search').value;
+    callAPI({ action: 'search_walkins', q: q }, function(results) {
+      renderWalkInResults(results);
+    });
+  });
+}
+
 // ─── MANUAL LOOKUP ────────────────────────────────────────────
 function openManual() {
   document.getElementById('manual-modal').classList.add('show');
@@ -592,6 +723,51 @@ document.addEventListener('DOMContentLoaded', function() {
   var input = document.getElementById('manual-id');
   if (input) input.addEventListener('keypress', function(e) { if (e.key === 'Enter') submitManual(); });
 });
+
+// ─── HARDWARE QR SCANNER SUPPORT (HID keyboard-emulation guns) ───────────────
+// Most USB/Bluetooth QR scanner guns type the decoded text as fast keystrokes,
+// then send Enter. This listens globally — no need to click into any field
+// first, and it works alongside the camera scanner at the same time.
+var hwBuffer = '';
+var hwLastKeyTime = 0;
+var HW_KEY_GAP_MS = 60; // real typing is slower than this; scanner guns type near-instantly
+
+document.addEventListener('keydown', function(e) {
+  // Ignore if the person is actively typing in a real input field (avoid double-processing
+  // the Manual Lookup box, which has its own Enter handler above)
+  var active = document.activeElement;
+  var isTypingField = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+
+  var now = Date.now();
+  var gap = now - hwLastKeyTime;
+  hwLastKeyTime = now;
+
+  // Large gap since last key = start of a new sequence (or just normal human typing)
+  if (gap > HW_KEY_GAP_MS) hwBuffer = '';
+
+  if (e.key === 'Enter') {
+    var candidate = hwBuffer.trim().toUpperCase();
+    hwBuffer = '';
+    // Only auto-process if it wasn't typed into the Manual Lookup field itself
+    // (that field already handles its own Enter via submitManual above) and it
+    // matches our QR ID pattern — this filters out accidental Enter presses
+    // elsewhere on the page.
+    if (!isTypingField && candidate.indexOf('MBC2026-') === 0) {
+      processQRCode(candidate);
+    }
+    return;
+  }
+
+  // Only buffer plain single characters (letters, numbers, hyphen) — ignore
+  // modifier keys, arrows, etc. Don't buffer while someone is typing in a
+  // real field (that has its own value already).
+  if (!isTypingField && e.key.length === 1) {
+    hwBuffer += e.key;
+    // Safety cap so a stray long paste-like burst never grows unbounded
+    if (hwBuffer.length > 40) hwBuffer = hwBuffer.slice(-40);
+  }
+});
+
 </script>
 
 </body>
