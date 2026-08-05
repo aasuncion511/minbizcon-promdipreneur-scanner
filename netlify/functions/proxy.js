@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 // PASTE YOUR GOOGLE APPS SCRIPT DEPLOYMENT URL BELOW
-var GAS_URL = 'https://script.google.com/macros/s/AKfycbyRrisC8Zq9Div9DwHdXH1M_XwgPjESgWcbiV-ZsdKOrEyHUUJjodxCi732nWAVn5qDfQ/exec';
+var GAS_URL = 'https://script.google.com/macros/s/AKfycbyvOCK3YufLCktjsPNkw3QAOkhZqSZ4h2vkkgvuJ-aAsovutfFNfqfNNlxUyJcMoS3Hsw/exec';
 
 exports.handler = async function (event) {
   // Allow the browser to call this function from any page on this site
