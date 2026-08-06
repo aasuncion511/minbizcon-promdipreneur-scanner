@@ -152,7 +152,7 @@
 
 <!-- ══════════ PERSISTENT WALK-IN SEARCH (always visible) ══════════ -->
 <div id="walkin-bar">
-  <input type="text" id="walkin-search" placeholder="🔍 Find Walk-In by name..." autocomplete="off" />
+  <input type="text" id="walkin-search" placeholder="🔍 Find anyone by name (walk-in or lost QR)..." autocomplete="off" />
 </div>
 <div id="walkin-results"></div>
 
@@ -630,13 +630,40 @@ function hideWalkInResults() { document.getElementById('walkin-results').classLi
 function renderWalkInResults(results) {
   var container = document.getElementById('walkin-results');
   if (!results || results.length === 0) {
-    container.innerHTML = '<div class="wi-empty">No matching unprocessed walk-ins found</div>';
+    container.innerHTML = '<div class="wi-empty">No matching participants found</div>';
     showWalkInResults();
     return;
   }
 
   var html = '';
   results.forEach(function(r) {
+
+    if (r.type === 'registered') {
+      // Already has a QR/ID — they just lost it or forgot it. Reuse the
+      // exact same check-in logic as a normal QR scan (processQRCode),
+      // so this behaves identically to scanning their code directly.
+      if (r.alreadyCheckedIn) {
+        html +=
+          '<div class="wi-card">' +
+            '<div class="wi-name">' + r.name + '</div>' +
+            '<div class="wi-sub">' + (r.company || '—') + (r.position ? ' · ' + r.position : '') + ' · ' + r.id + '</div>' +
+            '<span class="wi-status paid">✅ Already checked in at ' + r.checkinTime + ' — ' + r.dayLabel + '</span>' +
+          '</div>';
+      } else {
+        html +=
+          '<div class="wi-card">' +
+            '<div class="wi-name">' + r.name + '</div>' +
+            '<div class="wi-sub">' + (r.company || '—') + (r.position ? ' · ' + r.position : '') + ' · ' + r.id + '</div>' +
+            '<span class="wi-status waived">📋 Already registered — lost/forgot QR</span>' +
+            '<div class="wi-btns">' +
+              '<button class="wi-btn-process" onclick="checkInSearchedId(\'' + r.id + '\')">✅ Check In Today</button>' +
+            '</div>' +
+          '</div>';
+      }
+      return;
+    }
+
+    // type === 'unprocessed' — brand new walk-in, needs QR generated
     var sClass = statusClass(r.paymentStatus);
     var reviewBadge = r.reviewFlag
       ? '<span class="wi-status review">🚩 ' + r.reviewFlag + '</span>'
@@ -655,6 +682,16 @@ function renderWalkInResults(results) {
   });
   container.innerHTML = html;
   showWalkInResults();
+}
+
+// Check in an already-registered person found via search — reuses the
+// exact same flow as a normal QR scan, just triggered by tapping a name
+// instead of pointing the camera at a code.
+function checkInSearchedId(id) {
+  hideWalkInResults();
+  document.getElementById('walkin-search').value = '';
+  document.getElementById('walkin-search').blur();
+  processQRCode(id);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
