@@ -47,6 +47,7 @@
     .wi-status { display:inline-block; font-size:10.5px; font-weight:700; padding:3px 10px; border-radius:12px; margin-bottom:10px; margin-right:6px; }
     .wi-status.paid    { background:rgba(46,139,58,0.25); color:#90EE90; }
     .wi-status.waived  { background:rgba(144,144,255,0.2); color:#b3b3ff; }
+    .wi-status.pending { background:rgba(184,114,10,0.3); color:#ffcc80; font-weight:800; }
     .wi-status.review  { background:rgba(176,0,32,0.25); color:#ff9999; }
     .wi-btns { display:flex; gap:8px; }
     .wi-btn-process { flex:1; padding:10px; background:#1A5C2A; border:none; border-radius:8px; color:white; font-size:12.5px; font-weight:700; cursor:pointer; }
@@ -619,8 +620,9 @@ var walkinSearchTimer = null;
 
 function statusClass(status) {
   if (!status) return '';
-  if (status === 'Paid') return 'paid';
+  if (status.indexOf('Paid') === 0) return 'paid';
   if (status.indexOf('Non-Paying') === 0) return 'waived';
+  if (status.indexOf('For Payment') === 0) return 'pending';
   return '';
 }
 
@@ -665,6 +667,7 @@ function renderWalkInResults(results) {
 
     // type === 'unprocessed' — brand new walk-in, needs QR generated
     var sClass = statusClass(r.paymentStatus);
+    var statusIcon = r.paymentStatus && r.paymentStatus.indexOf('For Payment') === 0 ? '⚠️ ' : '';
     var reviewBadge = r.reviewFlag
       ? '<span class="wi-status review">🚩 ' + r.reviewFlag + '</span>'
       : '';
@@ -672,7 +675,7 @@ function renderWalkInResults(results) {
       '<div class="wi-card">' +
         '<div class="wi-name">' + r.name + '</div>' +
         '<div class="wi-sub">' + (r.company || '—') + (r.position ? ' · ' + r.position : '') + '</div>' +
-        '<span class="wi-status ' + sClass + '">' + (r.paymentStatus || 'No status') + '</span>' +
+        '<span class="wi-status ' + sClass + '">' + statusIcon + (r.paymentStatus || 'No status') + '</span>' +
         reviewBadge +
         '<div class="wi-btns">' +
           '<button class="wi-btn-process" onclick="processWalkInRow(' + r.row + ')">✅ Process</button>' +
